@@ -1,13 +1,14 @@
 #!/bin/bash
 
-set -x
+set -e
 
 aws_account_id=$(aws sts get-caller-identity --query 'Account' --output text)
 echo "AWS Account ID: $aws_account_id"
 
 aws_region="us-east-1"
-bucket_name="mohanseshetty-101"
+bucket_name="mohan-bucket-101"
 lambda_func_name="s3-lambda-function"
+role_name="s3-lambda-sns"
 email_id="devops77781@gmail.com"
 
 # Create IAM Role for S3 Lambda function
@@ -35,7 +36,7 @@ aws iam attach-role-policy --role-name $role_name --policy-arn arn:aws:iam::aws:
 aws iam attach-role-policy --role-name $role_name --policy-arn arn:aws:iam::aws:policy/AmazonSNSFullAccess
 
 bucket_create=$(aws s3api create-bucket --bucket "$bucket_name" --region "$aws_region")
-echo "Bucket creation output: $bucket_create"
+echo "Bucket creation: $bucket_create"
 
 #Upload sample file to S3 
 aws s3 cp ./SampleFile.txt s3://"$bucket_name"/SampleFile.txt
@@ -47,43 +48,44 @@ aws lambda create-function \
     --region "$aws_region" \
     --function-name "$lambda_func_name" \
     --runtime "python3.8" \
-    --handler "lambda-func/s3-lambda-function.s3-lambda_handler" \
+    --handler "lambda-func/lambda-function.lambda_handler" \
     --memory-size 128 \
     --timeout 30 \
     --role "arn:aws:iam::$aws_account_id:role/$role_name" \
     --zip-file "fileb://./lambda-function.zip"
 
 aws lambda add-permission \
+    --region "$aws_region" \
     --function-name "$lambda_func_name" \
     --statement-id "s3-lambda-sns" \
     --action "lambda:InvokeFunction" \
     --principal s3.amazonaws.com \
     --source-arn "arn:aws:s3:::$bucket_name"
 
-LambdaFunctionArn="arn:aws:lambda:us-east-1:$aws_account_id:function:lambda-function"
+LambdaFunctionArn="arn:aws:lambda:$aws_region:$aws_account_id:function:s3-lambda-function"
 aws s3api put-bucket-notification-configuration \
     --region "$aws_region" \
     --bucket "$bucket_name" \
     --notification-configuration '{
-        "LambdaFunctionConfigurations": [{
+      "LambdaFunctionConfigurations": [{
             "LambdaFunctionArn": "'"$LambdaFunctionArn"'",
             "Events": ["s3:ObjectCreated:*"]
         }]
     }'
 
-    topic_arn=$(aws sns create-topic --name s3-lambda-sns --output json | jq -r '.topicArn')
-    echo "SNS Topic ARN: $topic_arn"
 
-    aws sns subscribe \
-        --topic_arn "$topic_arn" \
-        --protocol email
-        --notification-endpoint "$email_id"
+topic_arn=$(aws sns create-topic --name s3-lambda-sns --region "$aws_region" --output json | jq -r '.TopicArn')
+echo "SNS Topic ARN: $topic_arn"
+
+aws sns subscribe \
+    --region "$aws_region" \
+    --topic-arn "$topic_arn" \
+    --protocol email \
+    --notification-endpoint "$email_id"
     
-    aws sns publish \
-        --topic_arn "$topic_arn" \
-        --subject "A new file created in bucket" \
-        --message "file created succussfully from lambda function"
-        
-
-
-
+aws sns publish \
+    --region "$aws_region" \
+    --topic-arn "$topic_arn" \
+    --subject "A new file created in bucket" \
+    --message "file created succussfully from lambda function"
+       
